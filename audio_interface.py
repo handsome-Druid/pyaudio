@@ -8,6 +8,7 @@ import pyaudio
 import numpy as np
 import threading
 import time
+from collections import deque
 
 class MultiMicAudioInterface:
     def __init__(self, device_index=None, sample_rate=44100, channels=2, chunk_size=1024):
@@ -37,6 +38,13 @@ class MultiMicAudioInterface:
         # 新增：缓冲区更新标志
         self.buffer_updated = threading.Event()
         
+        # 音频队列功能 - 保存5秒的音频数据
+        self.queue_duration = 5.0  # 5秒
+        self.queue_max_frames = int(self.sample_rate * self.queue_duration / self.chunk_size)
+        self.audio_queue = deque(maxlen=self.queue_max_frames)  # 使用deque实现栈式存储
+        self.queue_timestamps = deque(maxlen=self.queue_max_frames)  # 对应的时间戳
+        self.queue_lock = threading.Lock()
+        
         # Initialize PyAudio
         self.pyaudio = pyaudio.PyAudio()
 
@@ -62,11 +70,21 @@ class MultiMicAudioInterface:
             
             # 确保数据大小匹配缓冲区
             if audio_data.shape[1] == self.chunk_size:
+                # 获取当前时间戳（使用高精度时间）
+                current_timestamp = time.time()
+                
                 # 更新双缓冲区
                 with self.buffer_lock:
                     self.current_write_buffer[:] = audio_data
                     # 设置缓冲区更新标志
                     self.buffer_updated.set()
+                
+                # 更新音频队列（栈式存储最新数据）
+                with self.queue_lock:
+                    self.audio_queue.append(audio_data.copy())  # 添加到队列末尾（最新数据）
+                    self.queue_timestamps.append(current_timestamp)
+                    # deque会自动删除超出maxlen的旧数据
+                    
             else:
                 print(f"警告：音频帧大小不匹配 {audio_data.shape} vs expected ({self.channels}, {self.chunk_size})")
                 
@@ -158,6 +176,110 @@ class MultiMicAudioInterface:
         with self.buffer_lock:
             # 简单检查：看当前写缓冲区是否为全零
             return not np.allclose(self.current_write_buffer, 0)
+    
+    def read_queue_latest_frame(self):
+        """
+        从队列中读取最新的一帧音频数据
+        
+        Returns:
+            tuple: (audio_data, timestamp) 或 (None, None)
+                audio_data: 音频数据 (channels, samples)
+                timestamp: 该帧的时间戳
+        """
+        with self.queue_lock:
+            if len(self.audio_queue) == 0:
+                return None, None
+            
+            # 获取最新的一帧（队列末尾）
+            latest_frame = self.audio_queue[-1].copy()
+            latest_timestamp = self.queue_timestamps[-1]
+            
+            return latest_frame, latest_timestamp
+    
+    def read_queue_all_frames(self):
+        """
+        从队列中读取所有音频帧（按时间顺序，最旧到最新）
+        
+        Returns:
+            tuple: (frames_list, timestamps_list) 或 ([], [])
+                frames_list: 音频帧列表，每个元素为 (channels, samples)
+                timestamps_list: 对应的时间戳列表
+        """
+        with self.queue_lock:
+            if len(self.audio_queue) == 0:
+                return [], []
+            
+            frames = [frame.copy() for frame in self.audio_queue]
+            timestamps = list(self.queue_timestamps)
+            
+            return frames, timestamps
+    
+    def read_queue_duration(self, duration):
+        """
+        从队列中读取指定时长的最新音频数据
+        
+        Args:
+            duration: 需要读取的时长（秒），最大5秒
+            
+        Returns:
+            tuple: (audio_data, start_timestamp, end_timestamp) 或 (None, None, None)
+                audio_data: 拼接后的音频数据 (channels, total_samples)
+                start_timestamp: 第一帧时间戳
+                end_timestamp: 最后一帧时间戳
+        """
+        duration = min(duration, self.queue_duration)  # 限制最大时长
+        needed_frames = int(duration * self.sample_rate / self.chunk_size)
+        
+        with self.queue_lock:
+            if len(self.audio_queue) == 0:
+                return None, None, None
+            
+            # 从队列末尾向前取指定数量的帧
+            actual_frames = min(needed_frames, len(self.audio_queue))
+            start_idx = len(self.audio_queue) - actual_frames
+            
+            selected_frames = list(self.audio_queue)[start_idx:]
+            selected_timestamps = list(self.queue_timestamps)[start_idx:]
+            
+            if not selected_frames:
+                return None, None, None
+            
+            # 拼接音频数据
+            concatenated_audio = np.concatenate(selected_frames, axis=1)
+            start_timestamp = selected_timestamps[0]
+            end_timestamp = selected_timestamps[-1]
+            
+            return concatenated_audio, start_timestamp, end_timestamp
+    
+    def get_queue_status(self):
+        """
+        获取队列状态信息
+        
+        Returns:
+            dict: 队列状态信息
+                - frame_count: 当前队列中的帧数
+                - max_frames: 最大帧数
+                - duration: 当前队列覆盖的时长（秒）
+                - max_duration: 最大时长（秒）
+                - is_full: 队列是否已满
+        """
+        with self.queue_lock:
+            frame_count = len(self.audio_queue)
+            current_duration = frame_count * self.chunk_size / self.sample_rate
+            
+            return {
+                'frame_count': frame_count,
+                'max_frames': self.queue_max_frames,
+                'duration': current_duration,
+                'max_duration': self.queue_duration,
+                'is_full': frame_count >= self.queue_max_frames
+            }
+    
+    def clear_queue(self):
+        """清空音频队列"""
+        with self.queue_lock:
+            self.audio_queue.clear()
+            self.queue_timestamps.clear()
 
     def close(self):
         """关闭音频接口"""

@@ -5,6 +5,8 @@
 ## 🎯 项目特性
 
 - **双缓冲区实现**: 无阻塞音频数据读取，确保数据连续性
+- **音频队列缓存**: 5秒滑动窗口队列，栈式保存最新音频数据并自动溢出管理
+- **时间戳支持**: 每帧音频数据都带有精确的时间戳信息
 - **多设备支持**: 自动检测和管理系统音频输入设备
 - **多通道处理**: 支持单声道、立体声及多声道音频采集
 - **实时处理**: 低延迟音频流处理和分析
@@ -75,6 +77,31 @@ if all_channels:
 
 # 或获取特定通道
 left_data = audio.get_channel_data(0, timeout=1.0)  # 获取通道0
+```
+
+### 4. 音频队列功能
+
+```python
+# 获取最新一帧音频及其时间戳
+frame, timestamp = audio.read_queue_latest_frame()
+if frame is not None:
+    print(f"最新音频帧时间: {timestamp}")
+    print(f"音频数据: {frame.shape}")
+
+# 获取指定时长的音频数据（最新的N秒）
+audio_data, start_ts, end_ts = audio.read_queue_duration(2.0)  # 获取最新2秒
+if audio_data is not None:
+    print(f"时间范围: {start_ts} ~ {end_ts}")
+    print(f"音频时长: {audio_data.shape[1] / audio.sample_rate:.2f}秒")
+
+# 获取所有队列中的音频帧
+frames, timestamps = audio.read_queue_all_frames()
+print(f"队列中共有 {len(frames)} 帧数据")
+
+# 查看队列状态
+status = audio.get_queue_status()
+print(f"队列使用率: {status['frame_count']}/{status['max_frames']}")
+print(f"覆盖时长: {status['duration']:.2f}s")
 ```
 
 ## 📚 API 文档
@@ -178,6 +205,87 @@ if channels:
 
 ```python
 audio.close()
+```
+
+#### 音频队列方法
+
+##### `read_queue_latest_frame()`
+从队列中读取最新的一帧音频数据及其时间戳。
+
+**返回值**:
+- `tuple`: `(audio_data, timestamp)` 或 `(None, None)`
+  - `audio_data`: 音频数据，形状为`(channels, samples)`
+  - `timestamp`: 该帧的高精度时间戳（float，Unix时间）
+
+**示例**:
+```python
+frame, timestamp = audio.read_queue_latest_frame()
+if frame is not None:
+    import datetime
+    dt = datetime.datetime.fromtimestamp(timestamp)
+    print(f"最新帧时间: {dt.strftime('%H:%M:%S.%f')}")
+```
+
+##### `read_queue_duration(duration)`
+从队列中读取指定时长的最新音频数据。
+
+**参数**:
+- `duration` (float): 需要读取的时长（秒），最大5秒
+
+**返回值**:
+- `tuple`: `(audio_data, start_timestamp, end_timestamp)` 或 `(None, None, None)`
+  - `audio_data`: 拼接后的音频数据，形状为`(channels, total_samples)`
+  - `start_timestamp`: 第一帧时间戳
+  - `end_timestamp`: 最后一帧时间戳
+
+**示例**:
+```python
+# 获取最新3秒的音频数据
+data, start_ts, end_ts = audio.read_queue_duration(3.0)
+if data is not None:
+    actual_duration = data.shape[1] / audio.sample_rate
+    print(f"实际获取时长: {actual_duration:.2f}秒")
+```
+
+##### `read_queue_all_frames()`
+从队列中读取所有音频帧（按时间顺序排列）。
+
+**返回值**:
+- `tuple`: `(frames_list, timestamps_list)` 或 `([], [])`
+  - `frames_list`: 音频帧列表，每个元素形状为`(channels, samples)`
+  - `timestamps_list`: 对应的时间戳列表
+
+**示例**:
+```python
+frames, timestamps = audio.read_queue_all_frames()
+for i, (frame, ts) in enumerate(zip(frames, timestamps)):
+    print(f"帧{i}: 时间戳={ts}, 形状={frame.shape}")
+```
+
+##### `get_queue_status()`
+获取队列状态信息。
+
+**返回值**:
+- `dict`: 包含以下键值的字典
+  - `frame_count`: 当前队列中的帧数
+  - `max_frames`: 最大帧数
+  - `duration`: 当前队列覆盖的时长（秒）
+  - `max_duration`: 最大时长（秒）
+  - `is_full`: 队列是否已满
+
+**示例**:
+```python
+status = audio.get_queue_status()
+print(f"队列使用率: {status['frame_count']}/{status['max_frames']}")
+print(f"时长: {status['duration']:.2f}s/{status['max_duration']}s")
+print(f"状态: {'满' if status['is_full'] else '填充中'}")
+```
+
+##### `clear_queue()`
+清空音频队列。
+
+```python
+audio.clear_queue()
 ```
 
 #### 上下文管理器支持
@@ -287,6 +395,103 @@ def real_time_analysis():
 
 # 运行实时分析
 real_time_analysis()
+```
+
+### 音频队列功能演示
+
+```python
+import time
+import numpy as np
+from datetime import datetime
+from audio_interface import MultiMicAudioInterface
+
+def demo_audio_queue():
+    """演示音频队列功能"""
+    
+    with MultiMicAudioInterface(channels=2) as audio:
+        audio.start_recording()
+        
+        # 等待队列填充
+        print("等待队列填充...")
+        time.sleep(3)
+        
+        # 1. 获取最新帧及时间戳
+        frame, timestamp = audio.read_queue_latest_frame()
+        if frame is not None:
+            dt = datetime.fromtimestamp(timestamp)
+            print(f"最新帧时间: {dt.strftime('%H:%M:%S.%f')[:-3]}")
+            
+            # 分析音频电平
+            for ch in range(frame.shape[0]):
+                rms = np.sqrt(np.mean(frame[ch]**2))
+                db = 20 * np.log10(rms + 1e-10)
+                print(f"通道{ch}电平: {db:.1f}dB")
+        
+        # 2. 获取最近2秒的音频数据
+        data, start_ts, end_ts = audio.read_queue_duration(2.0)
+        if data is not None:
+            start_time = datetime.fromtimestamp(start_ts)
+            end_time = datetime.fromtimestamp(end_ts)
+            actual_duration = data.shape[1] / audio.sample_rate
+            
+            print(f"\n获取音频时长: {actual_duration:.2f}秒")
+            print(f"时间范围: {start_time.strftime('%H:%M:%S.%f')[:-3]} ~ "
+                  f"{end_time.strftime('%H:%M:%S.%f')[:-3]}")
+            print(f"数据大小: {data.shape}")
+        
+        # 3. 监控队列状态
+        for i in range(5):
+            status = audio.get_queue_status()
+            print(f"\n队列状态 #{i+1}:")
+            print(f"  帧数: {status['frame_count']}/{status['max_frames']}")
+            print(f"  时长: {status['duration']:.2f}s")
+            print(f"  状态: {'已满' if status['is_full'] else '填充中'}")
+            
+            time.sleep(1)
+
+# 运行队列演示
+demo_audio_queue()
+```
+
+### 实时队列监控
+
+```python
+def real_time_queue_monitor():
+    """实时显示队列中最新音频帧的信息"""
+    
+    with MultiMicAudioInterface(channels=1) as audio:
+        audio.start_recording()
+        
+        try:
+            while True:
+                frame, timestamp = audio.read_queue_latest_frame()
+                if frame is not None:
+                    # 计算音频电平
+                    rms = np.sqrt(np.mean(frame**2))
+                    db = 20 * np.log10(rms + 1e-10)
+                    
+                    # 创建电平条
+                    bar_len = int(max(0, min(40, (db + 60) / 60 * 40)))
+                    bar = "█" * bar_len + "░" * (40 - bar_len)
+                    
+                    # 格式化时间
+                    dt = datetime.fromtimestamp(timestamp)
+                    time_str = dt.strftime('%H:%M:%S.%f')[:-3]
+                    
+                    # 队列状态
+                    status = audio.get_queue_status()
+                    
+                    print(f"\r{time_str} | {bar} {db:6.1f}dB | "
+                          f"队列: {status['frame_count']:3d}帧 "
+                          f"({status['duration']:.1f}s)", end="", flush=True)
+                
+                time.sleep(0.05)  # 20Hz更新频率
+                
+        except KeyboardInterrupt:
+            print("\n\n监控已停止")
+
+# 运行实时监控
+real_time_queue_monitor()
 ```
 
 ## 🔧 高级配置
