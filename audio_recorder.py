@@ -11,7 +11,7 @@ from datetime import datetime
 from audio_interface import MultiMicAudioInterface
 from device_detector import list_devices_simple, detect_audio_devices
 
-def record_to_mp3(device_index, channels, duration=30, output_filename=None):
+def record_to_mp3(device_index, channels, duration=30, output_filename=None, sample_format: str = "auto"):
     """
     录制音频并保存为WAV格式（流式写入，内存友好）
     
@@ -44,13 +44,18 @@ def record_to_mp3(device_index, channels, duration=30, output_filename=None):
         device_index=device_index,
         channels=channels,
         sample_rate=44100,
-        chunk_size=1024
+        chunk_size=1024,
+        sample_format=sample_format,
     ) as audio_interface, wave.open(output_filename, 'wb') as wav_file:
         
         # 设置WAV文件参数
         wav_file.setnchannels(channels)
-        wav_file.setsampwidth(2)  # 16-bit
         wav_file.setframerate(44100)
+        sampfmt = getattr(audio_interface, "sample_format_name", "int16")
+        if sampfmt == "int24":
+            wav_file.setsampwidth(3)
+        else:
+            wav_file.setsampwidth(2)  # 默认16-bit
         
         # 开始录音
         audio_interface.start_recording()
@@ -62,23 +67,36 @@ def record_to_mp3(device_index, channels, duration=30, output_filename=None):
         
         print(f"🎙️  录音中... (预计 {duration} 秒)")
         
+        last_written_timestamp = None
         while time.time() - start_time < duration:
-            # 等待新的音频数据（同步读取）
-            audio_data = audio_interface.read_audio_double_buffer(timeout=0.1)
-            
+            # 等待最新一帧到达
+            audio_data, ts = audio_interface.wait_for_next_frame(timeout=0.5)
             if audio_data is None:
-                # 超时，继续等待
                 continue
-            
+            # 仅基于时间戳去重（避免在慢速循环中重复写同一帧）
+            if last_written_timestamp is not None and ts == last_written_timestamp:
+                continue
+            last_written_timestamp = ts
+
             # 转换格式并直接写入文件
             # 从 (channels, samples) 转换为 (samples, channels)
-            audio_data = audio_data.T
-            # 转换到int16并写入
-            audio_int16 = np.clip(audio_data * 32767, -32768, 32767).astype(np.int16)
-            wav_file.writeframes(audio_int16.tobytes())
+            audio_frame = audio_data.T
+            # 根据采样格式写出
+            if sampfmt == "int24":
+                # float32 -> int24 little-endian bytes
+                interleaved_f = np.clip(audio_frame, -1.0, 1.0)
+                x = np.round(np.clip(interleaved_f * 8388608.0, -8388608, 8388607)).astype(np.int32)
+                b0 = (x & 0xFF).astype(np.uint8)
+                b1 = ((x >> 8) & 0xFF).astype(np.uint8)
+                b2 = ((x >> 16) & 0xFF).astype(np.uint8)
+                packed = np.stack([b0, b1, b2], axis=-1).reshape(-1)
+                wav_file.writeframes(packed.tobytes())
+            else:
+                audio_int16 = np.clip(audio_frame * 32767, -32768, 32767).astype(np.int16)
+                wav_file.writeframes(audio_int16.tobytes())
             
             frame_count += 1
-            total_samples_written += audio_data.shape[0]  # 实际写入的样本数
+            total_samples_written += audio_frame.shape[0]  # 实际写入的样本数
             
             # 每10块显示一次进度
             elapsed = time.time() - start_time
@@ -97,6 +115,7 @@ def record_to_mp3(device_index, channels, duration=30, output_filename=None):
         print(f"💾 音频已保存到: {output_filename}")
         print(f"   文件大小: {file_size:,} 字节 ({file_size/1024/1024:.2f} MB)")
         print(f"   实际时长: {actual_duration:.2f} 秒")
+        print(f"   采样格式: {sampfmt}")
         return output_filename
     except Exception as e:
         print(f"❌ 保存文件时出错: {e}")
