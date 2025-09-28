@@ -85,7 +85,91 @@ def strict_read_last4(audio: MultiMicAudioInterface):
     return data, t0, t1
 
 
+def process_audio_data(audio, data, t0, t1):
+    """处理并分析音频数据"""
+    duration = data.shape[1] / audio.sample_rate
+    print(f"时间范围: {datetime.fromtimestamp(t0).strftime('%H:%M:%S.%f')[:-3]} ~ {datetime.fromtimestamp(t1).strftime('%H:%M:%S.%f')[:-3]}")
+    print(f"数据形状: {tuple(data.shape)} | 实际时长: {duration:.2f}s")
+
+    # 简单电平分析
+    for ch in range(data.shape[0]):
+        rms = float(np.sqrt(np.mean(data[ch] ** 2)))
+        print(f"  通道{ch}: RMS={db_from_rms(rms):6.1f} dB")
+
+
+def save_concatenated_wav(collected, time_ranges, audio, args):
+    """保存拼接的WAV文件"""
+    if not collected:
+        print("\n⚠️ 未收集到任何数据，未生成WAV文件。")
+        return
+        
+    full = np.concatenate(collected, axis=1)  # (channels, total_samples)
+
+    # 生成文件名
+    if args.output:
+        out_path = Path(args.output)
+    else:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_name = f"strict_last4_concat_{ts}_sr{audio.sample_rate}_ch{audio.channels}_n{len(collected)}.wav"
+        out_path = Path(out_name)
+
+    # 写WAV（根据实际输入格式选择位深；支持int24/ int16）
+    with wave.open(str(out_path), 'wb') as wf:
+        wf.setnchannels(audio.channels)
+        wf.setframerate(audio.sample_rate)
+        interleaved_f = np.clip(full.T, -1.0, 1.0)
+        if getattr(audio, "sample_format_name", "int16") == "int24":
+            # 24位写入
+            wf.setsampwidth(3)
+            # float32 -> int24 little-endian bytes
+            x = np.round(np.clip(interleaved_f * 8388608.0, -8388608, 8388607)).astype(np.int32)
+            b0 = (x & 0xFF).astype(np.uint8)
+            b1 = ((x >> 8) & 0xFF).astype(np.uint8)
+            b2 = ((x >> 16) & 0xFF).astype(np.uint8)
+            packed = np.stack([b0, b1, b2], axis=-1).reshape(-1)
+            wf.writeframes(packed.tobytes())
+        else:
+            # 默认16位
+            wf.setsampwidth(2)
+            interleaved_i16 = (interleaved_f * 32767.0).astype(np.int16)  # (samples, channels)
+            wf.writeframes(interleaved_i16.tobytes())
+
+    total_sec = full.shape[1] / audio.sample_rate
+    tr0, tr1 = time_ranges[0][0], time_ranges[-1][1]
+    print("\n💾 已保存拼接WAV:")
+    print(f"  文件: {out_path.resolve()}")
+    print(f"  总时长: {total_sec:.2f}s | 片段数: {len(collected)}")
+    print(f"  覆盖时间: {datetime.fromtimestamp(tr0).strftime('%H:%M:%S.%f')[:-3]} ~ {datetime.fromtimestamp(tr1).strftime('%H:%M:%S.%f')[:-3]}")
+
+
+def run_reading_loop(audio, args):
+    """运行读取循环"""
+    collected = []  # 收集每次读取到的4秒数据 (channels, samples)
+    time_ranges = []  # 收集每次的时间范围 (t0, t1)
+
+    for i in range(1, args.iterations + 1):
+        print(f"—— 第 {i}/{args.iterations} 次 ——")
+        try:
+            data, t0, t1 = strict_read_last4(audio)
+        except ValueError as e:
+            print(f"❌ 读取失败: {e}")
+            break
+
+        process_audio_data(audio, data, t0, t1)
+
+        # 保存本次结果以便最终拼接
+        collected.append(data)
+        time_ranges.append((t0, t1))
+
+        if i < args.iterations:
+            print("⏳ 等待 4 秒进入下一轮……\n")
+            time.sleep(4.0)
+            
+    return collected, time_ranges
+
+
 def main():
+    """主程序"""
     args = parse_args()
     print("=" * 60)
     print("🎯 严格读取最后4秒音频")
@@ -109,76 +193,11 @@ def main():
             return
         print("\n✅ 缓存满足条件，开始严格读取循环。\n")
 
-        collected = []  # 收集每次读取到的4秒数据 (channels, samples)
-        time_ranges = []  # 收集每次的时间范围 (t0, t1)
-
-        for i in range(1, args.iterations + 1):
-            print(f"—— 第 {i}/{args.iterations} 次 ——")
-            try:
-                data, t0, t1 = strict_read_last4(audio)
-            except ValueError as e:
-                print(f"❌ 读取失败: {e}")
-                break
-
-            # 基本信息
-            duration = data.shape[1] / audio.sample_rate
-            print(f"时间范围: {datetime.fromtimestamp(t0).strftime('%H:%M:%S.%f')[:-3]} ~ {datetime.fromtimestamp(t1).strftime('%H:%M:%S.%f')[:-3]}")
-            print(f"数据形状: {tuple(data.shape)} | 实际时长: {duration:.2f}s")
-
-            # 简单电平分析
-            for ch in range(data.shape[0]):
-                rms = float(np.sqrt(np.mean(data[ch] ** 2)))
-                print(f"  通道{ch}: RMS={db_from_rms(rms):6.1f} dB")
-
-            # 保存本次结果以便最终拼接
-            collected.append(data)
-            time_ranges.append((t0, t1))
-
-            if i < args.iterations:
-                print("⏳ 等待 4 秒进入下一轮……\n")
-                time.sleep(4.0)
-
-        # 循环结束后，将所有片段拼接并写入WAV
-        if collected:
-            full = np.concatenate(collected, axis=1)  # (channels, total_samples)
-
-            # 生成文件名
-            if args.output:
-                out_path = Path(args.output)
-            else:
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                out_name = f"strict_last4_concat_{ts}_sr{audio.sample_rate}_ch{audio.channels}_n{len(collected)}.wav"
-                out_path = Path(out_name)
-
-            # 写WAV（根据实际输入格式选择位深；支持int24/ int16）
-            with wave.open(str(out_path), 'wb') as wf:
-                wf.setnchannels(audio.channels)
-                wf.setframerate(audio.sample_rate)
-                interleaved_f = np.clip(full.T, -1.0, 1.0)
-                if getattr(audio, "sample_format_name", "int16") == "int24":
-                    # 24位写入
-                    wf.setsampwidth(3)
-                    # float32 -> int24 little-endian bytes
-                    x = np.round(np.clip(interleaved_f * 8388608.0, -8388608, 8388607)).astype(np.int32)
-                    b0 = (x & 0xFF).astype(np.uint8)
-                    b1 = ((x >> 8) & 0xFF).astype(np.uint8)
-                    b2 = ((x >> 16) & 0xFF).astype(np.uint8)
-                    packed = np.stack([b0, b1, b2], axis=-1).reshape(-1)
-                    wf.writeframes(packed.tobytes())
-                else:
-                    # 默认16位
-                    wf.setsampwidth(2)
-                    interleaved_i16 = (interleaved_f * 32767.0).astype(np.int16)  # (samples, channels)
-                    wf.writeframes(interleaved_i16.tobytes())
-
-            total_sec = full.shape[1] / audio.sample_rate
-            tr0, tr1 = time_ranges[0][0], time_ranges[-1][1]
-            print("\n💾 已保存拼接WAV:")
-            print(f"  文件: {out_path.resolve()}")
-            print(f"  总时长: {total_sec:.2f}s | 片段数: {len(collected)}")
-            print(f"  覆盖时间: {datetime.fromtimestamp(tr0).strftime('%H:%M:%S.%f')[:-3]} ~ {datetime.fromtimestamp(tr1).strftime('%H:%M:%S.%f')[:-3]}")
-        else:
-            print("\n⚠️ 未收集到任何数据，未生成WAV文件。")
+        # 运行读取循环
+        collected, time_ranges = run_reading_loop(audio, args)
+        
+        # 保存拼接的WAV文件
+        save_concatenated_wav(collected, time_ranges, audio, args)
 
         print("\n🎉 完成。")
 

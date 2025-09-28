@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-音频接口测试程序
-指定设备和通道数，录制30秒音频并保存为MP3
+音频接口测试程序 - 指定设备和通道数，录制30秒音频并保存为WAV
 """
 
 import sys
@@ -9,7 +8,10 @@ import time
 import numpy as np
 from datetime import datetime
 from audio_interface import MultiMicAudioInterface
-from device_detector import list_devices_simple, detect_audio_devices
+from device_detector import list_devices_simple
+
+# 常量定义
+USER_CANCEL_MESSAGE = "\n❌ 用户取消或输入无效"
 
 def record_to_mp3(device_index, channels, duration=30, output_filename=None, sample_format: str = "auto"):
     """
@@ -33,7 +35,7 @@ def record_to_mp3(device_index, channels, duration=30, output_filename=None, sam
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_filename = f"audio_record_{timestamp}_dev{device_index}_ch{channels}.wav"
     
-    print(f"📡 开始录制音频...")
+    print("📡 开始录制音频...")
     print(f"   设备索引: {device_index}")
     print(f"   通道数: {channels}")
     print(f"   时长: {duration} 秒")
@@ -122,24 +124,18 @@ def record_to_mp3(device_index, channels, duration=30, output_filename=None, sam
         return None
 
 
-def main():
-    """主程序"""
-    print("="*60)
-    print("🎵 音频录制测试程序")
-    print("="*60)
-    
-    # 检测可用设备
+def select_device():
+    """选择音频设备，返回 (device_index, device_name, max_channels) 或 None"""
     try:
         devices = list_devices_simple()
         if not devices:
             print("❌ 未找到可用的音频输入设备！")
-            return
+            return None
             
     except Exception as e:
         print(f"❌ 检测音频设备时出错: {e}")
-        return
+        return None
     
-    # 用户选择设备
     try:
         print(f"\n请选择音频设备 (1-{len(devices)}):")
         choice = input("设备编号 (默认1): ").strip()
@@ -151,16 +147,19 @@ def main():
             
         if not (0 <= device_choice < len(devices)):
             print("❌ 无效的设备选择")
-            return
+            return None
             
         device_index, device_name, max_channels = devices[device_choice]
         print(f"✅ 选择设备: {device_name} (设备 {device_index})")
+        return device_index, device_name, max_channels
         
     except (ValueError, KeyboardInterrupt):
-        print("\n❌ 用户取消或输入无效")
-        return
-    
-    # 选择通道数
+        print(USER_CANCEL_MESSAGE)
+        return None
+
+
+def select_channels(max_channels):
+    """选择通道数，返回通道数或 None"""
     try:
         print(f"\n该设备最大支持 {max_channels} 通道")
         channels_input = input(f"请输入通道数 (1-{max_channels}, 默认{min(2, max_channels)}): ").strip()
@@ -172,57 +171,95 @@ def main():
             
         if not (1 <= channels <= max_channels):
             print(f"❌ 通道数必须在 1-{max_channels} 之间")
-            return
+            return None
             
         print(f"✅ 选择通道数: {channels}")
+        return channels
         
     except (ValueError, KeyboardInterrupt):
-        print("\n❌ 用户取消或输入无效")
-        return
-    
-    # 选择录制时长
+        print(USER_CANCEL_MESSAGE)
+        return None
+
+
+def select_duration():
+    """选择录制时长，返回时长或 None"""
     try:
         duration_input = input("\n录制时长(秒, 默认30): ").strip()
         duration = 30 if duration_input == "" else int(duration_input)
         
         if duration <= 0:
             print("❌ 录制时长必须大于0")
-            return
+            return None
             
         print(f"✅ 录制时长: {duration} 秒")
+        return duration
         
     except (ValueError, KeyboardInterrupt):
-        print("\n❌ 用户取消或输入无效")
-        return
-    
-    # 开始录制
+        print(USER_CANCEL_MESSAGE)
+        return None
+
+
+def confirm_recording():
+    """确认开始录制，返回 True 继续，False 取消"""
     print(f"\n{'='*60}")
     print("准备开始录制，按任意键继续或 Ctrl+C 取消...")
     try:
         input()
+        return True
     except KeyboardInterrupt:
         print("\n❌ 用户取消")
+        return False
+
+
+def handle_playback(output_file):
+    """处理录制完成后的播放选项"""
+    play_choice = input("\n是否播放录制的音频？(y/n, 默认n): ").strip().lower()
+    if play_choice == 'y':
+        try:
+            import os
+            if os.name == 'nt':  # Windows
+                os.startfile(output_file)
+            else:  # macOS/Linux
+                os.system(f"open '{output_file}'" if sys.platform == "darwin" else f"xdg-open '{output_file}'")
+            print("🔊 正在播放音频...")
+        except Exception as e:
+            print(f"❌ 无法播放音频: {e}")
+
+
+def main():
+    """主程序"""
+    print("="*60)
+    print("🎵 音频录制测试程序")
+    print("="*60)
+    
+    # 选择设备
+    device_info = select_device()
+    if device_info is None:
+        return
+    device_index, _, max_channels = device_info
+    
+    # 选择通道数
+    channels = select_channels(max_channels)
+    if channels is None:
         return
     
+    # 选择录制时长
+    duration = select_duration()
+    if duration is None:
+        return
+    
+    # 确认开始录制
+    if not confirm_recording():
+        return
+    
+    # 开始录制
     try:
         output_file = record_to_mp3(device_index, channels, duration)
         
         if output_file:
-            print(f"\n🎉 录制成功完成！")
+            print("\n🎉 录制成功完成！")
             print(f"📁 文件保存位置: {output_file}")
-            
-            # 询问是否播放
-            play_choice = input("\n是否播放录制的音频？(y/n, 默认n): ").strip().lower()
-            if play_choice == 'y':
-                try:
-                    import os
-                    if os.name == 'nt':  # Windows
-                        os.startfile(output_file)
-                    else:  # macOS/Linux
-                        os.system(f"open '{output_file}'" if sys.platform == "darwin" else f"xdg-open '{output_file}'")
-                    print("🔊 正在播放音频...")
-                except Exception as e:
-                    print(f"❌ 无法播放音频: {e}")
+            handle_playback(output_file)
         else:
             print("❌ 录制失败")
             

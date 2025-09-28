@@ -1,22 +1,51 @@
 # -*- coding: utf-8 -*-
 """
-音频设备检测器
-检测系统中可用的音频输入设备及其支持的通道配置
+音频设备检测器 - 检测系统中可用的音频输入设备及其支持的通道配置
 """
 
 import pyaudio
 
-def detect_audio_devices():
-    """
-    检测系统中所有可用的音频输入设备
+def test_device_channels(p, device_index, info):
+    """测试设备支持的通道配置"""
+    supported_channels = []
+    test_channels = [1, 2, 4, 6, 8]
     
-    Returns:
-        list: 包含设备信息的列表，每个元素为 (device_index, device_info, supported_channels)
-    """
-    p = pyaudio.PyAudio()
+    for channels in test_channels:
+        if channels <= info['maxInputChannels']:
+            try:
+                test_stream = p.open(
+                    format=pyaudio.paInt16,
+                    channels=channels,
+                    rate=int(info['defaultSampleRate']),
+                    input=True,
+                    input_device_index=device_index,
+                    frames_per_buffer=1024,
+                    start=False
+                )
+                test_stream.close()
+                supported_channels.append(channels)
+            except Exception:
+                pass
+    return supported_channels
+
+
+def print_device_details(device_index, info, supported_channels):
+    """打印单个设备的详细信息"""
+    print(f"\n📱 设备 {device_index}: {info['name']}")
+    print(f"   最大输入通道: {info['maxInputChannels']}")
+    print(f"   默认采样率: {int(info['defaultSampleRate'])}")
     
-    input_devices = []
-    
+    if supported_channels:
+        channels_str = ", ".join(map(str, supported_channels))
+        print(f"   ✅ 支持通道: {channels_str}")
+        recommended = max(supported_channels)
+        print(f"   🎯 推荐通道: {recommended}")
+    else:
+        print("   ❌ 无可用通道配置")
+
+
+def print_device_header(p):
+    """打印设备检测头部信息"""
     print("="*80)
     print("音频输入设备检测")
     print("="*80)
@@ -26,52 +55,31 @@ def detect_audio_devices():
     try:
         default_input = p.get_default_input_device_info()
         print(f"默认输入设备: {default_input['name']} (设备 {default_input['index']})")
-    except:
+    except Exception:
         print("无默认输入设备")
     
     print("\n输入设备列表:")
     print("-" * 80)
+
+
+def detect_audio_devices():
+    """
+    检测系统中所有可用的音频输入设备
+    
+    Returns:
+        list: 包含设备信息的列表，每个元素为 (device_index, device_info, supported_channels)
+    """
+    p = pyaudio.PyAudio()
+    input_devices = []
+    
+    print_device_header(p)
     
     for i in range(p.get_device_count()):
         try:
             info = p.get_device_info_by_index(i)
             if info['maxInputChannels'] > 0:
-                
-                print(f"\n📱 设备 {i}: {info['name']}")
-                print(f"   最大输入通道: {info['maxInputChannels']}")
-                print(f"   默认采样率: {int(info['defaultSampleRate'])}")
-                
-                # 测试支持的通道配置
-                supported_channels = []
-                test_channels = [1, 2, 4, 6, 8]
-                
-                for channels in test_channels:
-                    if channels <= info['maxInputChannels']:
-                        try:
-                            # 尝试打开流测试
-                            test_stream = p.open(
-                                format=pyaudio.paInt16,
-                                channels=channels,
-                                rate=int(info['defaultSampleRate']),
-                                input=True,
-                                input_device_index=i,
-                                frames_per_buffer=1024,
-                                start=False
-                            )
-                            test_stream.close()
-                            supported_channels.append(channels)
-                        except:
-                            pass
-                
-                if supported_channels:
-                    channels_str = ", ".join(map(str, supported_channels))
-                    print(f"   ✅ 支持通道: {channels_str}")
-                    recommended = max(supported_channels)
-                    print(f"   🎯 推荐通道: {recommended}")
-                else:
-                    print(f"   ❌ 无可用通道配置")
-                    supported_channels = []
-                
+                supported_channels = test_device_channels(p, i, info)
+                print_device_details(i, info, supported_channels)
                 input_devices.append((i, info, supported_channels))
                 
         except Exception as e:
@@ -139,11 +147,11 @@ if __name__ == "__main__":
         print(f"推荐采样率: {int(device_info['defaultSampleRate'])}")
         
         print("\n使用示例:")
-        print(f"from audio_interface import MultiMicAudioInterface")
-        print(f"interface = MultiMicAudioInterface(")
+        print("from audio_interface import MultiMicAudioInterface")
+        print("interface = MultiMicAudioInterface(")
         print(f"    device_index={device_idx},")
         print(f"    channels={recommended_channels},")
         print(f"    sample_rate={int(device_info['defaultSampleRate'])}")
-        print(f")")
+        print(")")
     else:
         print("❌ 未找到可用的音频输入设备！")

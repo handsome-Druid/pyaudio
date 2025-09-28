@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-多麦克风音频接口驱动（基于栈式/队列缓存）
-保留最近固定时长（默认5秒）的音频帧，并提供便捷的读取接口。
+多麦克风音频接口驱动（基于栈式/队列缓存） - 保留最近固定时长（默认5秒）的音频帧，并提供便捷的读取接口。
 """
 
 import pyaudio
@@ -147,7 +146,6 @@ class MultiMicAudioInterface:
                 with self.queue_lock:
                     self.audio_queue.append(audio_data.copy())  # 添加到队列末尾（最新数据）
                     self.queue_timestamps.append(current_timestamp)
-                    # deque会自动删除超出maxlen的旧数据
                 # 通知有新帧到达
                 self.new_frame_event.set()
                     

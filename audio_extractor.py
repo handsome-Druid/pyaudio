@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-音频数据提取和分析工具
-从JSON文件中提取完整的音频数据并进行分析或保存为音频文件
+音频数据提取和分析工具 - 从JSON文件中提取完整的音频数据并进行分析或保存为音频文件
 """
 
 import json
@@ -29,7 +28,7 @@ def extract_audio_from_json(json_file, output_format='wav'):
         metadata = results['metadata']
         readings = results['readings']
         
-        print(f"📋 文件信息:")
+        print("📋 文件信息:")
         print(f"   设备: {metadata['device_name']}")
         print(f"   通道数: {metadata['selected_channels']}")
         print(f"   采样率: {metadata['sample_rate']} Hz")
@@ -137,7 +136,7 @@ def analyze_extracted_audio(json_file):
         metadata = results['metadata']
         readings = results['readings']
         
-        print(f"\n📊 详细分析结果:")
+        print("\n📊 详细分析结果:")
         print(f"{'='*60}")
         
         all_rms_values = []
@@ -203,7 +202,7 @@ def analyze_extracted_audio(json_file):
         
         # 总体统计
         if all_rms_values:
-            print(f"\n📈 总体统计:")
+            print("\n📈 总体统计:")
             print(f"   总音频时长: {total_duration:.2f} 秒")
             print(f"   平均RMS电平: {np.mean(all_rms_values):6.1f} dB")
             print(f"   RMS电平范围: {np.min(all_rms_values):6.1f} ~ {np.max(all_rms_values):6.1f} dB")
@@ -249,7 +248,7 @@ def main():
             return
         
         if result:
-            print(f"\n✅ 提取完成！")
+            print("\n✅ 提取完成！")
             print(f"   总共提取: {result['total_files']} 个文件")
             
             total_size = sum(f['size'] for f in result['extracted_files'])
@@ -258,7 +257,7 @@ def main():
             print(f"   总文件大小: {total_size:,} 字节 ({total_size/1024/1024:.2f} MB)")
             print(f"   总音频时长: {total_duration:.2f} 秒")
             
-            print(f"\n📁 提取的文件:")
+            print("\n📁 提取的文件:")
             for file_info in result['extracted_files']:
                 print(f"   - {file_info['filename']} "
                       f"({file_info['size']:,} 字节, "
