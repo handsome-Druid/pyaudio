@@ -100,7 +100,7 @@ class MultiMicAudioInterface:
     def _convert_int16_to_float32(self, in_data, frame_count):
         audio = np.frombuffer(in_data, dtype=np.int16)
         audio = audio.reshape((frame_count, self.channels)).T
-        return (audio.astype(np.float32) / 32768.0)
+        return audio.astype(np.float32) / 32768.0
 
     def _convert_float32_to_float32(self, in_data, frame_count):
         audio = np.frombuffer(in_data, dtype=np.float32)
@@ -129,15 +129,14 @@ class MultiMicAudioInterface:
         return audio
 
     def _audio_callback(self, in_data, frame_count, time_info, status):
-        """PyAudio 回调函数，在音频线程中自动调用"""
         try:
             # 将回调输入转换为 float32, 形状 (channels, frame_count)
             if self._convert_input is None:
                 # 理论上不应发生
                 print("错误：未初始化的输入转换器")
-                return (None, pyaudio.paAbort)
+                return None, pyaudio.paAbort
             audio_data = self._convert_input(in_data, frame_count)
-            
+
             # 确保数据大小匹配缓冲区
             if audio_data.shape[1] == self.chunk_size:
                 # 获取当前时间戳（使用高精度时间）
@@ -148,14 +147,14 @@ class MultiMicAudioInterface:
                     self.queue_timestamps.append(current_timestamp)
                 # 通知有新帧到达
                 self.new_frame_event.set()
-                    
+
             else:
                 print(f"警告：音频帧大小不匹配 {audio_data.shape} vs expected ({self.channels}, {self.chunk_size})")
-                
+
         except Exception as e:
             print(f"音频回调错误: {e}")
-            
-        return (None, pyaudio.paContinue)
+
+        return None, pyaudio.paContinue
 
     def start_recording(self):
         """开始录音"""
@@ -329,7 +328,7 @@ class MultiMicAudioInterface:
             frames_snapshot = list(self.audio_queue)
 
         # 锁外查找满足 start < ts <= end 的帧索引区间
-        sel_idx = [i for i, ts in enumerate(ts_snapshot) if (ts > start_timestamp and ts <= end_timestamp)]
+        sel_idx = [i for i, ts in enumerate(ts_snapshot) if (start_timestamp < ts <= end_timestamp)]
         if not sel_idx:
             raise ValueError("指定时间范围内没有可用的音频帧")
 
